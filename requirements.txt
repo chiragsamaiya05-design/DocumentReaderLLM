@@ -1,0 +1,16 @@
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+python-multipart>=0.0.9,<1.0
+python-dotenv>=1.0,<2.0
+# This project uses the LangChain 0.2 module layout (langchain.chains,
+# langchain.text_splitter). Pin it so installs do not pull LangChain 1.x.
+langchain==0.2.17
+langchain-community==0.2.19
+pypdf>=4.0,<6.0
+sentence-transformers>=2.7,<4.0
+faiss-cpu>=1.8,<2.0
+transformers>=4.40,<5.0
+torch
+groq>=0.12,<1.0
+streamlit>=1.35,<2.0
+requests>=2.31,<3.0
