@@ -1,8 +1,4 @@
-"""
-Builds and persists a LangChain FAISS vector store per document.
-LangChain's FAISS wrapper handles the index + docstore + id-mapping
-internally (previously we managed a sidecar JSON metadata file by hand).
-"""
+
 from pathlib import Path
 from typing import List
 from langchain_community.vectorstores import FAISS

@@ -1,4 +1,4 @@
-"""Retrieve relevant PDF chunks and generate a grounded answer with Groq."""
+
 import os
 
 from groq import Groq

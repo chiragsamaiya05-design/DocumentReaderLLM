@@ -1,8 +1,4 @@
-"""
-Turns a loaded FAISS vector store into a LangChain retriever object,
-which the RetrievalQA chain can call directly — no manual similarity
-search or numpy handling needed on our side anymore.
-"""
+
 from app.retrieval.vector_store import load_index
 from app.config import TOP_K
 

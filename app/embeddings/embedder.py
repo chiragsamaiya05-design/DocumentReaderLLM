@@ -1,8 +1,4 @@
-"""
-Wraps LangChain's HuggingFaceEmbeddings so the same embedding object
-can be passed directly into a LangChain vector store (FAISS), instead
-of manually calling .encode() and managing numpy arrays ourselves.
-"""
+
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from app.config import EMBEDDING_MODEL_NAME
 

@@ -1,9 +1,3 @@
-"""
-Uses LangChain's PyPDFLoader (loads each page as a Document with
-page_content + metadata['page']) and RecursiveCharacterTextSplitter
-to produce citable chunks. LangChain preserves page metadata across
-the split automatically, which is what we relied on manually before.
-"""
 from typing import List
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
