@@ -1,8 +1,9 @@
 import uuid
 import shutil
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from groq import APIStatusError, APIConnectionError
 
-from app.config import UPLOAD_DIR
+from app.config import INDEX_DIR, MAX_UPLOAD_BYTES, UPLOAD_DIR
 from app.ingestion.loader import load_and_split_pdf
 from app.retrieval.vector_store import build_index, index_exists
 from app.generation.qa_chain import answer_question
@@ -13,25 +14,46 @@ app = FastAPI(title="DocuMind (LangChain)", description="Multi-PDF Q&A with sour
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_pdf(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(".pdf"):
+    filename = file.filename or ""
+    if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.",
+        )
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="The uploaded file is not a valid PDF.")
 
     doc_id = str(uuid.uuid4())[:8]
     save_path = UPLOAD_DIR / f"{doc_id}.pdf"
 
-    with open(save_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    save_path.write_bytes(content)
 
-    # --- LangChain ingestion pipeline ---
-    chunks = load_and_split_pdf(str(save_path))
-    if not chunks:
-        raise HTTPException(status_code=400, detail="Could not extract text from PDF.")
+    try:
+        chunks = load_and_split_pdf(str(save_path))
+        if not chunks:
+            raise HTTPException(status_code=400, detail="Could not extract text from PDF.")
+        for chunk in chunks:
+            chunk.metadata["filename"] = filename
 
-    build_index(doc_id, chunks)
+        build_index(doc_id, chunks)
+    except HTTPException:
+        save_path.unlink(missing_ok=True)
+        shutil.rmtree(INDEX_DIR / doc_id, ignore_errors=True)
+        raise
+    except Exception as error:
+        save_path.unlink(missing_ok=True)
+        shutil.rmtree(INDEX_DIR / doc_id, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="Could not process this PDF.") from error
 
     return UploadResponse(
         doc_id=doc_id,
-        filename=file.filename,
+        filename=filename,
         num_chunks=len(chunks),
         message=f"Document indexed successfully. Use doc_id='{doc_id}' to ask questions.",
     )
@@ -39,18 +61,40 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.post("/ask", response_model=AskResponse)
 async def ask_question(request: AskRequest):
-    if not index_exists(request.doc_id):
-        raise HTTPException(status_code=404, detail="doc_id not found. Upload the document first.")
+    doc_ids = request.selected_doc_ids()
+    if not doc_ids:
+        raise HTTPException(status_code=400, detail="Select at least one indexed document.")
+    missing = [doc_id for doc_id in doc_ids if not index_exists(doc_id)]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Unknown document ID(s): {', '.join(missing)}")
 
     try:
-        answer, sources = answer_question(request.doc_id, request.question)
+        answer, sources = answer_question(doc_ids, request.question)
     except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise HTTPException(
+            status_code=503,
+            detail=str(error)
+        ) from error
+
+    except APIStatusError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Groq API error: {error.status_code}"
+        ) from error
+
+    except APIConnectionError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to connect to Groq API."
+        ) from error
 
     if not sources:
         raise HTTPException(status_code=404, detail="No relevant content found.")
 
-    source_chunks = [SourceChunk(page=s["page"], text=s["text"]) for s in sources]
+    source_chunks = [
+        SourceChunk(filename=s.get("filename", ""), page=s["page"], chunk_id=s["chunk_id"], text=s["text"])
+        for s in sources
+    ]
     return AskResponse(answer=answer, sources=source_chunks)
 
 

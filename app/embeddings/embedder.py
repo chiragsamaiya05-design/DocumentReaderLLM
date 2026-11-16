@@ -8,5 +8,10 @@ _embeddings = None
 def get_embeddings() -> HuggingFaceEmbeddings:
     global _embeddings
     if _embeddings is None:
-        _embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+        # Cosine similarity is more reliable across differently sized chunks
+        # than raw embedding magnitude.
+        _embeddings = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL_NAME,
+            encode_kwargs={"normalize_embeddings": True},
+        )
     return _embeddings

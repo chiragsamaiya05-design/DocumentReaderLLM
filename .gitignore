@@ -35,3 +35,56 @@ Thumbs.db
 
 # Docker overrides
 docker-compose.override.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+
+# Operating system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Uploaded documents
+uploads/
+data/uploads/
+*.pdf
+
+# Vector databases
+faiss_index/
+vector_store/
+vectorstore/
+*.faiss
+*.pkl
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
