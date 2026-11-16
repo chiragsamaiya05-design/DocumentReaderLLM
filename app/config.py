@@ -16,8 +16,7 @@ INDEX_DIR = DATA_DIR / "indexes"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-INDEX_DIR.mkdir(parents=True, exist_ok=True)
+
 
 
 CHUNK_SIZE = 900
