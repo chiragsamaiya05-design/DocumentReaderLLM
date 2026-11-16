@@ -110,9 +110,9 @@ defaults = {
     "documents": [],          # {"doc_id", "filename", "hash"}
     "messages": [],
     "api_base_url": DEFAULT_API_URL,
-    "uploader_version": 0,    # bump to clear the file uploader after indexing
-    "flash": None,            # (added, skipped, failed) from the last upload
-    "pending_question": None, # set by suggestion buttons
+    "uploader_version": 0,    
+    "flash": None,            
+    "pending_question": None, 
 }
 for key, value in defaults.items():
     if key not in st.session_state:
@@ -183,11 +183,150 @@ def render_sources(sources: list) -> None:
             )
 
 
+def render_debug(debug: dict) -> None:
+    """Render retrieval and generation diagnostics returned by the API."""
+    if not debug:
+        return
+
+    with st.expander("RAG Debug Information", expanded=False):
+        st.markdown("### Retrieval overview")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Dense candidates", debug.get("dense_candidates", 0))
+        col2.metric("Lexical candidates", debug.get("lexical_candidates", 0))
+        col3.metric("Final chunks", debug.get("final_chunks", 0))
+        st.write("Relevance Threshold:", debug.get("relevance_threshold"))
+        st.write("Relevant Candidates:", debug.get("relevant_chunks"))
+        st.write("Rejected Candidates:", debug.get("rejected_chunks"))
+
+        st.caption(
+            f"Strategy: {debug.get('retrieval_strategy', 'Not provided')}"
+        )
+
+        st.markdown("### Performance")
+        col1, col2 = st.columns(2)
+        retrieval_time = debug.get("retrieval_time_seconds")
+        generation_time = debug.get("generation_time_seconds")
+
+        col1.metric(
+            "Retrieval time",
+            f"{retrieval_time:.4f} s" if isinstance(retrieval_time, (int, float)) else "N/A",
+        )
+        col2.metric(
+            "Generation time",
+            f"{generation_time:.4f} s" if isinstance(generation_time, (int, float)) else "N/A",
+        )
+
+        st.markdown("### Model and token usage")
+        st.write(f"**Model:** {debug.get('model', 'N/A')}")
+        st.write(f"**Finish reason:** {debug.get('finish_reason', 'N/A')}")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Prompt tokens", debug.get("prompt_tokens") or 0)
+        col2.metric("Completion tokens", debug.get("completion_tokens") or 0)
+        col3.metric("Total tokens", debug.get("total_tokens") or 0)
+
+        st.markdown("### Retrieved chunks")
+        chunks = debug.get("retrieved_chunks", [])
+
+        if not chunks:
+            st.info("The API did not return any retrieved-chunk diagnostics.")
+            return
+
+        rows = []
+        for chunk in chunks:
+            rows.append(
+                {
+                    "Filename": chunk.get("filename", ""),
+                    "Page": chunk.get("page"),
+                    "Chunk ID": chunk.get("chunk_id"),
+                    "Dense rank": chunk.get("dense_rank"),
+                    "Lexical rank": chunk.get("lexical_rank"),
+                    "RRF score": chunk.get("rrf_score"),
+                    "Methods": ", ".join(chunk.get("retrieval_methods", [])),
+                    "Semantic relevance": chunk.get("semantic_relevance"),
+                }
+            )
+
+        # Display retrieved chunks without using Pandas or PyArrow
+        headers = [
+            "Filename",
+            "Page",
+            "Chunk ID",
+            "Dense rank",
+            "Lexical rank",
+            "Semantic relevance",
+            "RRF score",
+            "Methods",
+        ]
+
+        table_html = """
+        <style>
+        .debug-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .debug-table th, .debug-table td {
+            border: 1px solid #394150;
+            padding: 10px;
+            text-align: left;
+        }
+        .debug-table th {
+            background-color: #242c38;
+            color: #f4d35e;
+        }
+        .debug-table td {
+            color: #e4e8ee;
+        }
+        </style>
+        <table class="debug-table">
+        <tr>
+        """
+
+        for header in headers:
+            table_html += f"<th>{html.escape(header)}</th>"
+
+        table_html += "</tr>"
+
+        for row in rows:
+            table_html += "<tr>"
+
+            for header in headers:
+                value = row.get(header)
+                display_value = "—" if value is None else str(value)
+
+                table_html += (
+                    f"<td>{html.escape(display_value)}</td>"
+                )
+
+            table_html += "</tr>"
+
+        table_html += "</table>"
+
+        st.markdown(table_html, unsafe_allow_html=True)
+        st.markdown("### Retrieved chunk content")
+        for index, chunk in enumerate(chunks, start=1):
+            title = (
+                f"Chunk {index} · Page {chunk.get('page', '?')} · "
+                f"ID {chunk.get('chunk_id', '?')}"
+            )
+            with st.expander(title):
+                st.write(f"**Dense rank:** {chunk.get('dense_rank')}")
+                st.write(f"**Lexical rank:** {chunk.get('lexical_rank')}")
+                st.write(f"**RRF score:** {chunk.get('rrf_score')}")
+                st.write(f"**Semantic relevance:** {chunk.get('semantic_relevance')}")
+                methods = chunk.get("retrieval_methods", [])
+                st.write(f"**Retrieval methods:** {', '.join(methods)}")
+                st.text(chunk.get("text", "Chunk text is not included in debug metadata."))
+
+
 def render_message(message: dict) -> None:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message["role"] == "assistant":
             render_sources(message.get("sources", []))
+            render_debug(message.get("debug"))
             if message.get("elapsed") is not None:
                 st.markdown(f"<div class='answer-meta'>Answered in {message['elapsed']:.1f}s</div>", unsafe_allow_html=True)
 
@@ -208,10 +347,26 @@ def build_transcript(messages: list) -> str:
     return "\n".join(lines)
 
 
-def ask_backend(question: str, doc_ids: list) -> dict:
+def ask_backend(
+    question: str,
+    doc_ids: list,
+    include_debug: bool = False,
+) -> dict:
     started = time.perf_counter()
-    response = requests.post(api_url("/ask"), json={"doc_ids": doc_ids, "question": question}, timeout=300)
+
+    payload = {
+        "doc_ids": doc_ids,
+        "question": question,
+        "include_debug": include_debug,
+    }
+
+    response = requests.post(
+        api_url("/ask"),
+        json=payload,
+        timeout=300,
+    )
     response.raise_for_status()
+
     result = response.json()
     result["elapsed"] = time.perf_counter() - started
     return result
@@ -225,6 +380,14 @@ with st.sidebar:
     st.button("New chat", use_container_width=True, on_click=new_chat, disabled=not st.session_state.messages)
     st.divider()
 
+    st.subheader("Developer Tools")
+    debug_mode = st.toggle(
+        "Enable RAG Debug Mode",
+        value=False,
+        help="Display retrieval rankings, RRF scores, execution times and retrieved chunks.",
+    )
+
+    st.divider()
     st.subheader("Documents")
     uploaded_files = st.file_uploader(
         "Add PDFs",
@@ -366,15 +529,21 @@ if question and active_ids:
     with st.chat_message("assistant"):
         try:
             with st.spinner("Searching your documents…"):
-                result = ask_backend(question, active_ids)
+                result = ask_backend(
+                    question,
+                    active_ids,
+                    include_debug=debug_mode,
+                )
             assistant_message = {
                 "role": "assistant",
                 "content": result["answer"],
                 "sources": result.get("sources", []),
+                "debug": result.get("debug"),
                 "elapsed": result["elapsed"],
             }
             st.markdown(assistant_message["content"])
             render_sources(assistant_message["sources"])
+            render_debug(assistant_message.get("debug"))
             st.markdown(
                 f"<div class='answer-meta'>Answered in {assistant_message['elapsed']:.1f}s</div>",
                 unsafe_allow_html=True,

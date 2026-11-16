@@ -5,7 +5,7 @@ import time
 from groq import Groq
 
 from app.config import GROQ_MODEL_NAME, MAX_NEW_TOKENS
-from app.retrieval.retriever import retrieve
+from app.retrieval.retriever import retrieve_with_debug
 
 
 # ============================================================
@@ -178,7 +178,11 @@ def extract_sources(documents):
 # ANSWER GENERATION
 # ============================================================
 
-def answer_question(doc_ids, question: str):
+def answer_question(
+    doc_ids,
+    question: str,
+    include_debug: bool = False
+):
 
     start_time = time.perf_counter()
 
@@ -200,12 +204,19 @@ def answer_question(doc_ids, question: str):
 
     logger.info("Starting document retrieval.")
 
-    documents = retrieve(
+    retrieval_start = time.perf_counter()
+
+    documents, debug_info = retrieve_with_debug(
         doc_ids,
         question
     )
 
-    retrieval_time = time.perf_counter() - start_time
+    retrieval_time = time.perf_counter() - retrieval_start
+
+    debug_info["retrieval_time_seconds"] = round(
+        retrieval_time,
+        4
+    )
 
     logger.info(
         "Retrieved %d document chunks in %.2f seconds.",
@@ -219,11 +230,15 @@ def answer_question(doc_ids, question: str):
 
     if not documents:
 
-        return (
+        answer = (
             "I couldn't find sufficient information about "
-            "this in the uploaded documents.",
-            []
+            "this in the uploaded documents."
         )
+
+        if include_debug:
+            return answer, [], debug_info
+
+        return answer, []
 
     # --------------------------------------------------------
     # STEP 4: CONSTRUCT CONTEXT
@@ -313,6 +328,11 @@ Generate a clear and informative response.
         time.perf_counter() - generation_start
     )
 
+    debug_info["generation_time_seconds"] = round(
+        generation_time,
+        4
+    )
+
     # --------------------------------------------------------
     # STEP 7: EXTRACT AND VALIDATE RESPONSE
     # --------------------------------------------------------
@@ -375,6 +395,27 @@ Generate a clear and informative response.
 
     answer = answer.strip()
 
+    debug_info["model"] = completion.model
+
+    debug_info["finish_reason"] = choice.finish_reason
+
+    debug_info["prompt_tokens"] = (
+        completion.usage.prompt_tokens
+        if completion.usage else None
+    )
+
+    debug_info["completion_tokens"] = (
+        completion.usage.completion_tokens
+        if completion.usage else None
+    )
+
+    debug_info["total_tokens"] = (
+        completion.usage.total_tokens
+        if completion.usage else None
+    )
+
+    debug_info["context_characters"] = len(context)
+
     # --------------------------------------------------------
     # STEP 10: EXTRACT SOURCE REFERENCES
     # --------------------------------------------------------
@@ -395,5 +436,8 @@ Generate a clear and informative response.
     # --------------------------------------------------------
     # STEP 12: RETURN RESULT
     # --------------------------------------------------------
+
+    if include_debug:
+        return answer, sources, debug_info
 
     return answer, sources

@@ -1,7 +1,9 @@
+import os
 import uuid
 import shutil
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from groq import APIStatusError, APIConnectionError
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import INDEX_DIR, MAX_UPLOAD_BYTES, UPLOAD_DIR
 from app.ingestion.loader import load_and_split_pdf
@@ -10,6 +12,22 @@ from app.generation.qa_chain import answer_question
 from app.models.schemas import UploadResponse, AskRequest, AskResponse, SourceChunk
 
 app = FastAPI(title="DocuMind (LangChain)", description="Multi-PDF Q&A with source citations, built on LangChain")
+
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:8501"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8501",
+        FRONTEND_URL
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/upload", response_model=UploadResponse)
@@ -61,15 +79,47 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.post("/ask", response_model=AskResponse)
 async def ask_question(request: AskRequest):
+    # Step 1: Get selected document IDs
     doc_ids = request.selected_doc_ids()
-    if not doc_ids:
-        raise HTTPException(status_code=400, detail="Select at least one indexed document.")
-    missing = [doc_id for doc_id in doc_ids if not index_exists(doc_id)]
-    if missing:
-        raise HTTPException(status_code=404, detail=f"Unknown document ID(s): {', '.join(missing)}")
 
+    if not doc_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one indexed document."
+        )
+
+    # Step 2: Check whether all selected documents exist
+    missing = [
+        doc_id for doc_id in doc_ids
+        if not index_exists(doc_id)
+    ]
+
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown document ID(s): {', '.join(missing)}"
+        )
+
+    # Step 3: Generate answer
     try:
-        answer, sources = answer_question(doc_ids, request.question)
+        result = answer_question(
+            doc_ids,
+            request.question,
+            include_debug=request.include_debug
+        )
+
+        if request.include_debug:
+            answer, sources, debug_info = result
+        else:
+            answer, sources = result
+            debug_info = None
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        ) from error
+
     except RuntimeError as error:
         raise HTTPException(
             status_code=503,
@@ -88,15 +138,30 @@ async def ask_question(request: AskRequest):
             detail="Unable to connect to Groq API."
         ) from error
 
+    # Step 4: Check whether relevant sources were retrieved
     if not sources:
-        raise HTTPException(status_code=404, detail="No relevant content found.")
+        raise HTTPException(
+            status_code=404,
+            detail="No relevant content found."
+        )
 
+    # Step 5: Convert sources into Pydantic models
     source_chunks = [
-        SourceChunk(filename=s.get("filename", ""), page=s["page"], chunk_id=s["chunk_id"], text=s["text"])
-        for s in sources
+        SourceChunk(
+            filename=source.get("filename", ""),
+            page=source["page"],
+            chunk_id=source["chunk_id"],
+            text=source["text"]
+        )
+        for source in sources
     ]
-    return AskResponse(answer=answer, sources=source_chunks)
 
+    # Step 6: Return answer, sources, and optional debug information
+    return AskResponse(
+        answer=answer,
+        sources=source_chunks,
+        debug=debug_info
+    )
 
 @app.get("/")
 async def root():
